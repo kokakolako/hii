@@ -1,0 +1,303 @@
+#!/usr/bin/zsh
+
+set -v
+
+# User settings (feel free to change these settings)
+# -------------------------------------------------------------------
+readonly NICKNAME="kokakolako"
+readonly SERVER="kornbluth.freenode.net"
+readonly CUSTOM_PATH="$HOME/.irc"
+readonly REALNAME="Niklas Köhler"
+
+# Program variables
+# -------------------------------------------------------------------
+readonly PROGNAME="$(basename $0)"
+readonly ARGS="$@"
+readonly COUNT_ARGS="$#"
+
+# Print usage-information
+# -------------------------------------------------------------------
+usage() {
+
+cat <<- EOT
+    usage: $PROGNAME [OPTION]...
+
+    Hii --
+    A wrapper to use ii with much more comfort
+
+    OPTIONS:
+        -d | --dir                 Change the directory for the configuration files
+        -c | --channel             Set the IRC-Channel you want to join to
+        -n | --nickname            Set your nickname
+        -r | --realname            Set your realname
+        -s | --server              Set the server you want to join to
+        -h | --help                Show this help
+EOT
+
+} # <- usage
+
+# Generate Error Messages (and Warnings)
+# -------------------------------------------------------------------
+err_messages() {
+
+    local err_type="$1" ## err_type could be either "warning" or "error"
+    local err_code="$2" ## err_code could be a numeric value from 01..99
+    local message
+    local header
+
+    if [[ "$err_type" == "error" ]]; then
+
+        local header="\e[31;1mERROR:\e[0m "
+
+        case "$err_code" in
+            "01" )
+                local message="You have not choosen a server to connect to. So ii can not connect to a server. Choose an server and try to execute the program again. You can either set the SERVER variable or you can use the -s (or --server) flag to set a server."
+            ;;
+            "02" )
+                local message="You have not choosen a nickname. So ii can not connect you to a server.  Choose an nickname and try to execute the program again. You can either set the NICKNAME variable or you can use the -n (or --nickname) flag to set a nickname."
+            ;;
+            "03" )
+                local message="ii exited with an Error."
+            ;;
+        esac
+    elif [[ "$err_type" == "warning" ]]; then
+
+        local header="\e[1;32mWARNING:\e[0m "
+
+        case "$err_code" in
+            "01" )
+                local message="You may need to add a password to connect to your server"
+            ;;
+            "02" )
+                local message="ii is now trying to connect to the server without a password"
+            ;;
+            "03" )
+                local message="Please answer with \e[1m\"yes\"\e[0m or \e[1m\"no\"\e[0m"
+            ;;
+        esac
+
+    fi
+
+    return "$header $message"
+
+}
+
+# Process the arguments and start the specific functions
+# -------------------------------------------------------------------
+process_args() {
+
+local arg
+for arg do
+    case "$arg" in
+        "--channel" )
+            args="${args}-c"
+        ;;
+        "--help" )
+            args="${args}-h"
+        ;;
+        "--server" )
+            args="${args}-s"
+        ;;
+        "--realname" )
+            args="${args}-r"
+        ;;
+        "--nickname" )
+            args="${args}-r"
+        ;;
+        "--dir" )
+            args="${args}-p"
+        ;;
+        * )
+            if [[ "${args:0:1}" != "-" ]]; then
+                delim="\""
+                args="${args}${delim}${arg}${delim} "
+            fi
+        ;;
+    esac
+done
+
+eval set -- $args
+
+local parameter
+
+while getopts "h:c:s:r:n:d" OPTION; do
+    case $OPTION in
+        h )
+            usage
+            exit 0
+        ;;
+        c )
+            readonly CHANNEL="$OPTARG"
+        ;;
+        s )
+            readonly SERVER="$OPTARG"
+
+            # Adding the server to the ii parameter
+            parameter="$parameter -s $SERVER"
+        ;;
+        r )
+            readonly REALNAME="$OPTARG"
+
+            # Adding your realname to the ii parameter
+            parameter="$parameter -f $REALNAME"
+        ;;
+        n )
+            readonly NICKNAME="$OPTARG"
+
+            # Adding your nickname to the ii parameter
+            parameter="$parameter -n $NICKNAME"
+        ;;
+        d )
+            readonly CONFIG_DIR="$OPTARG"
+        ;;
+    esac
+done
+
+## Stop the program execution when no parameters are given
+## or no server or no nickname were set by the user
+if [ -n "$parameter" ]; then
+    readonly PARAMETER="$parameter"
+elif [ -z "$parameter" ]; then
+    if [ -z "$SERVER"]; then
+        echo "$( err_messages error "01" )"
+        exit 1
+    elif [ -z "$NICKNAME" ]; then
+        echo "$( err_messages error "02" )"
+        exit 1
+    fi
+fi
+
+} # <- process_args
+
+
+# Start ii
+# -------------------------------------------------------------------
+start_ii() {
+
+## Check if a channel is defined
+if [ -z "$CHANNEL" ]; then
+
+    ## Start ii with parameter
+    ii $PARAMETER &
+
+    ## Throw an error when ii failed
+    if [[ $? != 0 ]]; then
+        echo "$( err_messages error "03" )"
+        exit 1
+    fi
+
+    ## Start multitail to see the output of ii
+    multitail $CUSTOM_PATH/$SERVER/out
+
+else
+
+    ## Start ii with the concatenated parameters
+    if [ -z "$PASSWORD" ]; then
+        ii $PARAMETER &
+    else
+        ii $PARAMETER -k $PASSWORD &
+    fi
+
+    ## Throw an error when the execution of ii fails
+    if [[ $? != 0 ]]; then
+        echo "$( err_messages error "03" )"
+        exit 1
+    fi
+
+    if [ -d "$CUSTOM_PATH/$SERVER/$CHANNEL" ]; then
+
+        ## Check if the first character of $CHANNEL is a "#"
+        if [[ "${CHANNEL:0:1}" == "#" ]]; then
+
+            ## Change to the user-defind CHANNEL
+            echo "/j $CHANNEL" > "$CUSTOM_PATH/$SERVER/$CHANNEL/in"
+
+        else
+
+            ## Change to the user-defind CHANNEL
+            echo "/j #$CHANNEL" > "$CUSTOM_PATH/$SERVER/$CHANNEL/in"
+
+        fi
+
+        ## Start multitail to see the output of ii
+        multitail $CUSTOM_PATH/$SERVER/$CHANNEL/out
+
+    else
+
+        ## Start multitail to see the output of ii
+        multitail $CUSTOM_PATH/$SERVER/out
+
+    fi
+fi
+} # <- start_ii
+
+# Get the users password, to authentificate the user with the server
+# -------------------------------------------------------------------
+get_password() {
+
+if [ -n "$PASSWORD_STORE_DIR" ]; then
+    if [ -f "$PASSWORD_STORE_DIR/irc-$SERVER" ]; then
+        readonly PASSWORD="$( pass show irc-$SERVER | )"
+    else
+        # No password is given, so trying to add a new password
+        add_password
+    fi
+elif [ -f "$HOME/.password-store/irc-$SERVER" ]; then
+    readonly PASSWORD="$( pass show irc-$SERVER | )"
+else
+    add_password
+fi
+
+} # <- get_password
+
+# Add a new password
+# -------------------------------------------------------------------
+add_password() {
+
+echo "$( err_messages warning "01" )"
+echo "Do yo want to add a new password? \e[1m[y/n]\e[0m"
+read answer
+
+case "$answer" in
+    "y" | "yes" | "Yes" )
+        if [ -n "$SERVER" ]; then
+            pass insert "irc-$SERVER"
+        fi
+    ;;
+    "n" | "no" | "No" )
+        echo "$( err_messages warning "02" )"
+    ;;
+    * )
+        echo "$( err_messages warning "03" )"
+        add_password
+    ;;
+esac
+
+} # <- add_password
+
+# Creating a namespace to use only local variables
+# -------------------------------------------------------------------
+main() {
+
+## Usage information, when no arguments were given
+if [ $COUNT_ARGS -eq 0 ]; then
+    usage
+    exit 1
+fi
+
+## Process (i.e. validate) arguments and set the specific variables
+process_args "$ARGS"
+
+## Get the users password, to authentificate the user with the server
+## When no password were given the function execute add_password
+get_password
+
+## Finally start ii (and multitail)
+start_ii
+
+} # <- main
+
+# Execute the main-function
+# -------------------------------------------------------------------
+main
+
